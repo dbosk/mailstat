@@ -7,6 +7,7 @@ mailstat: mailstat.py
 
 mailstat.py: mailstat.py.nw
 mailstat.pdf: mailstat.py.nw mailstat.bib LICENSE
+mailstat.pdf: rfc.bib
 
 .PHONY: clean
 clean:

@@ -26,6 +26,7 @@
 
 \usepackage[natbib,style=alphabetic,backend=bibtexu]{biblatex}
 \addbibresource{mailstat.bib}
+\addbibresource{rfc.bib}
 
 \title{%
   mailstat: A Utility for Parsing Email Datasets
@@ -76,10 +77,10 @@ We will use the following structure:
 <<imports>>
 <<classes>>
 <<functions>>
-def main( argv ):
-  <<main body>>
+
 if (__name__ == "__main__"):
-  sys.exit( main( sys.argv ) )
+  argv = sys.argv
+  <<main body>>
 @ Then we will successively specify what these mean.
 The [[<<imports>>]] will contain our imported modules.
 For instance, since we use [[sys.argv]] and [[sys.exit]] above we'll need to 
@@ -94,7 +95,7 @@ The [[<<main body>>]] block contains the code of the main function.
 Basically, we need the following code blocks:
 <<main body>>=
 <<parse command-line arguments>>
-<<parse the email dataset>>
+<<generate statistics>>
 <<output result>>
 <<clean up and exit>>
 @ The [[<<parse command-line arguments>>]] and [[<<parse the email dataset>>]] 
@@ -127,422 +128,102 @@ args = vars( argp.parse_args(argv[1:]) )
 \label{sec:Design}
 
 In this section we will cover the requirements of our algorithm.
-
 The dataset that is to be parsed with this program can be of substantial size, 
 e.g.~the Enron dataset is \unit{2.6}{\giga\byte}.
 Due to this we want to avoid having to keep the entire dataset in memory at the 
 same time.
+However, we will keep the meta-data in memory.
 
-In some cases
+\subsection{The Dataset Format}
+
+We want to be able to process several datasets at the same time, but we need to 
+add at least one.
+We will do that by adding a dataset argument to the program:
+<<parse arguments>>=
+argp.add_argument( "-d", "--dataset", nargs="+", \
+  required=True, help="Adds an email dataset (Maildir) to process" )
+@ This will give us a Python list containing all the names.
+Since the datasets are in Maildir format, this will be a path to the root 
+directory of the Maildir structure.
+As such we will use
+<<imports>>=
+from pathlib import Path
+@ and add each path for processing:
+<<process arguments>>=
+paths = []
+for path in args["dataset"]:
+  paths.append( path )
+<<process paths>>
+@
+
+As stated above we want to read the meta-data into memory.
+We will store this using Python's dictionary data-structure:
+<<process paths>>=
+metadata = {}
+@ To read all meta-data, we will traverse the directories in depth-first order 
+and thus we will use the list [[paths]] as a stack:
+<<process paths>>=
+while len( paths ) > 0:
+  path = paths.pop()
+  <<process subdirectory>>
+@ We will iterate through the directory's contents, add each subdirectory to 
+the stack, and process each file:
+<<process subdirectory>>=
+for directory_entry in path.iterdir():
+  if directory_entry.is_dir():
+    paths.append( directory_entry )
+  else:
+    <<process file>>
+@ In the Maildir format, each file is an email message.
+We cover its processing next.
+
+\subsection{The Data Format}
 
 To parse the emails we will use the [[email]] package \cite{email} for Python 
 3:
 <<imports>>=
 import email.message
 import email.parser
-@
-
-Thus we need to be able to add several database files, and we must add at least 
-one.
-We will do that by adding a database argument to the program:
-<<parse arguments>>=
-argp.add_argument( "-d", "--database", nargs="+", \
-  required=True, help="Adds a questions database to use" )
-@ This will give us a Python list containing all the names, so we can read all 
-questions in each database:
-<<process arguments>>=
-questions = set()
-for database in args["database"]:
-  <<read questions database>>
-@ We store the questions in a set since we are not interested in any 
-redundancy, the same question should not be added twice even if it occurs in 
-two database files.
-
-\subsection{The Questions Database Format}
-
-Since the design allows for using old exams as database files, then we must 
-adapt our database format to this.
-We know that the exams are using the exam \cite{exam} document class.
-As such each question will start with the command \verb'\question' and end at 
-the beginning of the next question.
-Or in the special case of the last question, it ends with the end of the 
-[[questions]] environment.
-(See lines 87--290 in the example exam in Sect.~\ref{sec:ExampleExam} for an 
-example of a [[questions]] environment.)
-We can thus make use of Python's regular expressions facilities \cite{regex}:
-<<imports>>=
-import re
-@ We can use the following code block to set up a regular expression pattern to 
-match a question:
-<<set up question regex>>=
-question_code_pattern = re.compile( \
-  "\\\\question(.|\n)*?(?=(\\\\question|\\\\end{questions}))", \
-  re.MULTILINE )
-@ (See \cite{regex-lookaround} for a treatment of zero-width assertions in 
-regular expressions.)
-This expression will conveniently also include any parts or solution 
-environments used in the question.
-
-To read the questions database we need to do the following:
-<<read questions database>>=
-<<set up question regex>>
-file_contents = open( database, "r" ).read()
-<<match a question>>
-while ( match ):
-  <<parse question>>
-  <<remove matching question>>
-  <<match a question>>
-@ To match a question we simply let
-<<match a question>>=
-match = re.search( question_code_pattern, file_contents )
-@ This makes [[match]] an object of [[MatchObject]] type.
-This means that we can use its [[end()]] method to remove the already searched 
-text from [[file_contents]]:
-<<remove matching question>>=
-file_contents = file_contents[match.end():]
-@
-
-\subsection{The Question Format}
-
-Now that we know the format of the question databases, this brings us to the 
-next part: the format of the actual question and how to do
-[[<<parse question>>]].
-We need some sort of data structure to hold each question and its related 
-meta-data.
-One solution is to use a class:
-<<classes>>=
-class Question:
-  <<question constructors>>
-  <<question methods>>
-@
-
-We will have at least one constructor.
-A suitable one is to construct the question from its LaTeX code:
-<<question constructors>>=
-def __init__( self, code ):
-  <<question constructor body>>
-@ This LaTeX code is also a natural attribute of the class:
-<<question constructor body>>=
-self.__code = code
-@ We also need a get-method for the code attribute:
-<<question methods>>=
-def get_code( self ):
-  return self.__code
-@
-
-To be able to add a question to a set, the data structure must be <hashable>:
-<<question methods>>=
-def __hash__( self ):
-  return hash( self.__code )
-
-def __eq__( self, other ):
-  if ( not hasattr( other, "code" ) ):
-    return NotImplemented
-  return ( self.__code == other.__code )
-@ This also means that we are not allowed to modify the question object 
-throughout its lifetime, i.e.~the [[code]] attribute must not be modified.
-
-Now that we have everything we need to parse the question, we can thus define
-<<parse question>>=
-questions.add( Question( match.group() ) )
-@ where we add the question to the set of questions.
-
-
-\section{Randomly Selecting the Questions}
-
-% XXX Add references for how to create an exam
-The purpose of this work is to construct an exam, hence there are several 
-aspects we need to consider.
-The exam should examine if the student has reached the intended learning 
-outcomes.
-Since we cannot examine every detail of the material treated in the course, the 
-exam usually depends on a random sample of the material covering the key 
-concepts of the course.
-Thus, how we select the questions is of great importance.
-Firstly we need to identify similar questions.
-This is covered in Sect.~\ref{sec:tags}.
-Secondly we need to make a selection which coveres the course in a good way, 
-both in topics and in difficulty.
-In Sect.~\ref{sec:selection} we describe an algorithm which solves this 
-problem.
-
-\subsection{Tags}
-\label{sec:tags}
-
-We have handled the problem of the same question reoccurring.
-However, we still have the problem of similar questions occurring.
-These questions treat the same topic in a similar way and we must recognize 
-them as such: we don't want two questions which are too similar in an exam.
-One solution is that we mark the questions, using a system similar to tags.
-These tags can be used to identify topics, but also be used to mark the 
-difficulty level of the question.
-Thus it makes sense to have a set of tags as an attribute for our question 
-class:
-<<question constructor body>>=
-self.__tags = set()
-@ We also need a method to get this set:
-<<question methods>>=
-def get_tags( self ):
-  return self.__tags
-@
-
-To tag a question, we can use the LaTeX [[\label]] command.
-Most questions have an attached label, conventionally prefixed with [[q:]].
-We can use this convention to add a colon separated list of tags using the 
-label command.
-(See line 87 in Sect.~\ref{sec:ExampleExam} for an example.)
-This list can be extracted using the following regular expression:
-<<question constructor body>>=
-question_tags_pattern = re.compile( \
-  "\\\\label{(q|xrc):([^}]*)}",
-  re.MULTILINE )
-@ (Another possible prefix is [[xrc:]] for exercise.)
-We can then extract the tags using the second group in the pattern:
-<<question constructor body>>=
-self.__tags = set()
-matched_tags = re.search( question_tags_pattern, self.__code )
-if matched_tags != None:
-	self.__tags = set( matched_tags.group(2).split(":") )
-@ This will yield [[None]] if the regular expression does not match, i.e.~there 
-is no label for the question.
-If there is, this will yield a Python list of tags, which is immediately 
-converted to a set.
-
-When we generate an exam, we want to specify which tags we are interested in.
-We can do this using an argument on the command-line:
-<<parse arguments>>=
-argp.add_argument( "-t", "--tags", nargs="+", \
-  required=True, help="Adds required question tags" )
-@ This will give us a list of tags which we can use when selecting the 
-questions for the exam:
-<<process arguments>>=
-required_tags = set( args["tags"] )
-@
-
-\subsection{Handling Topics and Difficulty Levels}
-\label{sec:selection}
-
-We now have the set of required tags \(E\) for the exam, [[required_tags]] in 
-[[<<process arguments>>]] above.
-We also have the set of tags \(Q_i\) for each question \(i\), through the 
-[[get_tags()]] method in [[<<question methods>>]].
-What we want is a set of questions \(\{ Q_i \}_i\) which cover the exam \(E\), 
-i.e.~\(E = \bigcup_i Q_i\).
-Since we do not want unnecessarily many questions on the exam, we preferably 
-want to find a minimal cover.
-
-We can add both topics and difficulty levels as required tags for the exam.
-Thus, with the suggested approach we will cover both topics and all necessary 
-difficulty levels.
-
-\subsubsection{Finding a Covering}
-
-To find the covering of the exam \(E\), we will use the following approach:
-<<generate exam>>=
-exam_questions = set()
-<<until the exam is covered>>:
-  <<randomly select a question>>
-  <<check if the question is good>>
-  <<add the question to the exam>>
-  <<remove the question so we don't select it again>>
-@
-
-Our stop condition requires us to find the set of tags of the currently chosen 
-questions (\(\{Q_i\}_i = [[exam_questions]]\)).
-We can use the following function to find \(\bigcup_i Q_i\):
+@ This will allow us to parse any email message conforming to RFC 
+2822~\cite{rfc2822}\footnote{%
+  Note that although RFC 2822 has been obsoleted by RFC 5322~\cite{rfc5322}, 
+  this is the format currently supported by the Python 3 library.
+}.
+We can thus parse the email file using the following function:
 <<functions>>=
-def tags( questions ):
-  T = set()
-  for q in questions:
-    T.update( q.get_tags() )
-  return T
-@ Thus our stop condition can be formulated as follows:
-<<until the exam is covered>>=
-while required_tags != tags( exam_questions )
-@
-
-We can randomly select a question by
-<<randomly select a question>>=
-question = random.sample( questions, 1 )[0]
-@ [[random.sample]] returns a list of the one sample we requested, so we store 
-only that sample instead of the list.
-Then we can add the question to the exam by
-<<add the question to the exam>>=
-exam_questions.add( question )
-@ Lastly we remove it from the database so we do not select it again:
-<<remove the question so we don't select it again>>=
-questions.discard( question )
-@ The random selection also requires us to add the [[random]] module:
-<<imports>>=
-import random
-@
-
-\subsubsection{Checking if a Question is Good}
-
-The main part of the algorithm is [[<<check if the question is good>>]], and we 
-will cover that part now.
-We do not want to include questions which cover topics outside the scope of the 
-exam, hence the question tags must be a subset of the exam tags, 
-i.e.~\(Q_i\subset E\).
-However, sometimes we want to check this manually.
-Thus we let
-<<check if the question is good>>=
-if not args["manual"] and not question.get_tags().issubset( required_tags ):
-  <<remove the question so we don't select it again>>
-  continue
-@ We add a command-line option for fully manual mode:
-<<parse arguments>>=
-argp.add_argument( "-m", "--manual", default=False, action="store_true", \
-	help="Sets fully manual mode" )
-@
-
-We also want to guarantee that the algorithm progresses towards the stop 
-condition.
-To accomplish this we require that the intersection \(Q_j \cap \left( \bigcup_i 
-Q_i \right)\neq \emptyset\) between a new question \(Q_j\) and the already 
-selected questions \(\{ Q_i \}_i\) is not empty.
-However, we have a special case: if we use an old exam which is not properly 
-tagged, then we have questions with an empty tag set.
-We must take these into account as well.
-We also have the special case of the first selected question: when the set of 
-exam questions is empty, then the intersection will be empty.
-Thus we let
-<<check if the question is good>>=
-elif len( question.get_tags() ) > 0 and len( exam_questions ) > 0 and \
-len( tags( exam_questions ).intersection( question.get_tags() ) ) < 1:
-  <<remove the question so we don't select it again>>
-  continue
-@
-
-\subsection{Human Intervention}
-
-Some of the questions might not be tagged.
-Since the selection is randomized, we might want to have some human 
-intervention to guarantee a better selection.
-Thus we can ask the user for approval for each question.
-Since this is a feature we might optionally want, we can add a command-line 
-argument to enable it:
-<<parse arguments>>=
-argp.add_argument( "-i", "--interactive", \
-  default=False, action="store_true", \
-  help="Turns interactive mode on" )
-@
-
-One way to implement the approval is to ask the user to give the tags the 
-question satisfies; if none, then the question is discarded.
-We can ask for this when we check the question in
-[[<<check if the question is good>>]].
-So we let
-<<check if the question is good>>=
-elif args["interactive"]:
-  remaining_tags = required_tags.difference( tags( exam_questions ) )
-  user_tags = get_tags_from_user( question, remaining_tags, args["prettify"] )
-  if len( user_tags ) == 0:
-    <<remove the question so we don't select it again>>
-    continue
-  else:
-    <<set question tags>>
-    <<add the question to the exam>>
-@ To be able to [[<<set question tags>>]] we need a method for that in the 
-[[Question]] class:
-<<question methods>>=
-def set_tags( self, new_tags ):
-  self.__tags = new_tags
-@ And now we let
-<<set question tags>>=
-question.set_tags( set( user_tags.split() ) )
-@
-
-We use the function [[get_tags_from_user]] to get the set of tags for 
-a question from the user.
-As hinted above we define the function as follows:
+def parse_email( file ):
+  parser = email.parser.Parser()
+  return parser.parse( file )
+@ And thus
+<<process file>>=
+email = parse_email( directory_entry.open() )
+update_metadata( metadata, email )
+@ where [[update_metadata]] is a function
 <<functions>>=
-def get_tags_from_user( question, remaining_tags, prettify ):
-  <<get tags from user>>
-  return question_tags
-@ The reason we need the parameter [[remaining_tags]] is simply for usability, 
-to remind the user of what has not yet been covered.
-The parameter [[prettify]] specifies if we want the code to be prettified 
-before presented to the user.
-So the body of the function will be
-<<get tags from user>>=
-<<present the question>>
-<<present the remaining tags>>
-<<input tags from user>>
-@
+def update_metadata( metadata, email ):
+  <<extract meta-data>>
+@ which extracts meta-data from the email.
+What data is extracted is covered in the next 
+section.
+%Sect.~\ref{sec:StatisticalAnalysis}.
 
-\subsubsection{Presenting the Question}
 
-We have several options for presenting the question to the user.
-First, we can just print the code.
-Second, we can prettify the code in some way.
-We will use a command-line argument for enabling prettifying of the code:
-<<parse arguments>>=
-argp.add_argument( "-p", "--prettify", \
-  default=False, action="store_true", \
-  help="Turns on prettifying of code" )
-@ This yields the following:
-<<present the question>>=
-print( "QUESTION ######################################################" )
-if prettify:
-  <<prettify code>>
-else:
-  print( "%s" % question.get_code() )
-@
+\section{The Statistical Analysis}
+\label{sec:StatisticalAnalysis}
 
-We can use detex(1) to prettify the code in the terminal.
-To do this we use the [[subprocess]] module:
-<<imports>>=
-import subprocess
-@ We then run the question's LaTeX code through the detex(1) process and its 
-output will be the prettified code:
-<<prettify code>>=
-prettified_code = subprocess.check_output( "detex", shell=True, \
-  input = bytearray( question.get_code().encode( "UTF-8" ) ) )
-print( "%s" % prettified_code.decode( "UTF-8" ) )
-@
+In the Enron dataset, we found that the average message was
+X
+excluding any headers and attachments.
+The average user sent
+X
+messages per day, i.e.~we need on average
+X
+per day.
+The average user communicates with
+X
+other users.
 
-\subsubsection{Presenting the Tags}
-
-Then we continue with presenting the tags.
-We want to present the remaining tags to achieve a covering:
-<<present the remaining tags>>=
-print( "TAGS ######################################################" )
-print( "Remaining tags: ", end="" )
-for t in remaining_tags:
-  print( "%s " % t, end="" )
-print( "" )
-@ The tags for the question can be presented when asking the user to correct 
-the tags.
-
-\subsubsection{Getting User Input}
-
-Once we have presented the user with the data, we want to input the user's 
-decision.
-We want to make this easy, so any tags the question already has should be 
-suggested as default.
-(So this is where we present the user with the question tags.)
-For this we will use the [[readline]] module:
-<<imports>>=
-import readline
-@
-
-We want to use [[readline]] to set the default value to the set of tags for the 
-question:
-<<input tags from user>>=
-qtags = ""
-for t in question.get_tags():
-  qtags += t + " "
-readline.set_startup_hook( lambda: readline.insert_text( qtags ) )
-@ Then we input the tags from the user, with the tags already pre-entered:
-<<input tags from user>>=
-try:
-  question_tags = input( "Question tags: " )
-@ And finally we have to reset the default value for the input function:
-<<input tags from user>>=
-finally:
-  readline.set_startup_hook()
-@
+\dots
 
 
 \section{Generating the Output}
