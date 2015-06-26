@@ -4,10 +4,10 @@
 \usepackage[T1]{fontenc}
 \usepackage[british]{babel}
 \usepackage{authblk}
-\usepackage[binary,amssymb]{SIunits}
 \usepackage{amsmath}
 \usepackage{amssymb}
-\usepackage{python}
+\usepackage[binary,amssymb]{SIunits}
+\usepackage[defblank]{paralist}
 
 \usepackage{listings}
 \lstset{%
@@ -77,12 +77,17 @@ We will use the following structure:
 <<imports>>
 <<classes>>
 <<functions>>
-
-if (__name__ == "__main__"):
-  argv = sys.argv
+@ We want to be able to use this code as a library, e.g.~using PythonTeX in 
+a LaTeX paper.
+So we will implement all parts as separate functions to provide an API for this 
+purpose.
+However, we also want to be able to run this as a command-line program, thus
+<<examgen.py>>=
+def main( argv ):
   <<main body>>
-@ Then we will successively specify what these mean.
-The [[<<imports>>]] will contain our imported modules.
+if (__name__ == "__main__"):
+  sys.exit( main( sys.argv ) )
+@ The [[<<imports>>]] will contain our imported modules.
 For instance, since we use [[sys.argv]] and [[sys.exit]] above we'll need to 
 add
 <<imports>>=
@@ -134,6 +139,30 @@ Due to this we want to avoid having to keep the entire dataset in memory at the
 same time.
 However, we will keep the meta-data in memory.
 
+To store the meta-data we will use a sqlite3 database.
+The default is to keep it in memory, but if we use large datasets we might want 
+to be able to reuse the database.
+For this reason we add a command-line argument for specifying the file name:
+<<parse arguments>>=
+argp.add_argument( "-f", "--file", default=":memory:", \
+  help="Sets an optional file to store the database" )
+@ When we create the database, we will use this file name:
+<<process arguments>>=
+metadata = sqlite3.connect( args["file"] )
+<<initialize database>>
+@ If it is not set, it will default to the special name <:memory:> which makes 
+sqlite3 keep the database in memory.
+Of course, for this we also need to import the sqlite3 module:
+<<imports>>=
+import sqlite3
+@
+
+Each key in the database is an attribute in the dataset.
+So [[metadata]] is an index of all meta-data.
+Which attributes we are interested in will be covered in 
+Sect.~\ref{sec:StatisticalAnalysis}.
+Next we will cover the dataset format and its parsing.
+
 \subsection{The Dataset Format}
 
 We want to be able to process several datasets at the same time, but we need to 
@@ -141,7 +170,7 @@ add at least one.
 We will do that by adding a dataset argument to the program:
 <<parse arguments>>=
 argp.add_argument( "-d", "--dataset", nargs="+", \
-  required=True, help="Adds an email dataset (Maildir) to process" )
+  required=True, help="Adds email datasets (Maildir) to process" )
 @ This will give us a Python list containing all the names.
 Since the datasets are in Maildir format, this will be a path to the root 
 directory of the Maildir structure.
@@ -150,31 +179,52 @@ As such we will use
 from pathlib import Path
 @ and add each path for processing:
 <<process arguments>>=
-paths = []
 for path in args["dataset"]:
-  paths.append( path )
-<<process paths>>
+  <<update metadata>>
 @
 
-As stated above we want to read the meta-data into memory.
-We will store this using Python's dictionary data-structure:
-<<process paths>>=
-metadata = {}
-@ To read all meta-data, we will traverse the directories in depth-first order 
-and thus we will use the list [[paths]] as a stack:
-<<process paths>>=
-while len( paths ) > 0:
-  path = paths.pop()
-  <<process subdirectory>>
-@ We will iterate through the directory's contents, add each subdirectory to 
-the stack, and process each file:
-<<process subdirectory>>=
-for directory_entry in path.iterdir():
-  if directory_entry.is_dir():
-    paths.append( directory_entry )
-  else:
+As stated above we want to read the meta-data into memory, and for this we use 
+the database [[metadata]] from above.
+To read all meta-data, we will traverse the directories in depth-first order 
+and thus we will use a recursive function to update [[metadata]] with the data 
+found in [[path]]:
+<<update metadata>>=
+update_metadata( metadata, path, args["include"] )
+@ We stated above that we might not want to process all messages, rather, we 
+are interested in the messages in the sent folders.
+To do this we add a command-line option:
+<<parse arguments>>=
+argp.add_argument( "-i", "--include", default=".*", \
+  help="Adds a filter (regex) for inclusion of dataset files" )
+@ This option adds a regular expression which must match the path.
+This regular expression is passed as the [[filter]] parameter in the function 
+[[update_metadata]].
+This regular expression defaults to match all strings, so all paths are 
+included.
+We can use the following code chunk to check if a [[path]] matches the regular 
+expression [[filter]]:
+<<check if path matches regex>>=
+pattern = re.compile( filter )
+if pattern.match( str(path) ) == None:
+  return metadata
+@ And we must thus include the regular expressions module:
+<<imports>>=
+import re
+@
+
+The function [[update_metadata]] will then be defined as follows:
+<<functions>>=
+def update_metadata( metadata, path, filter=".*" ):
+  <<check if path matches regex>>
+  if path.is_dir():
+    for directory_entry in path.iterdir():
+      return update_metadata( metadata, directory_entry )
+  else
     <<process file>>
-@ In the Maildir format, each file is an email message.
+  return metadata
+@ We will iterate through the directory's contents, recursively process each 
+subdirectory, and process each file.
+In the Maildir format, each file is an email message.
 We cover its processing next.
 
 \subsection{The Data Format}
@@ -196,50 +246,93 @@ def parse_email( file ):
   return parser.parse( file )
 @ And thus
 <<process file>>=
-email = parse_email( directory_entry.open() )
-update_metadata( metadata, email )
-@ where [[update_metadata]] is a function
+email = parse_email( path.open() )
+index_email( metadata, email )
+@ where [[index_metadata]] is a function that extracts the meta-data from the 
+given email and indexes it in the [[metadata]] database:
 <<functions>>=
-def update_metadata( metadata, email ):
-  <<extract meta-data>>
-@ which extracts meta-data from the email.
-What data is extracted is covered in the next 
+def index_email( metadata, email ):
+  <<index meta-data>>
+@ What data is extracted ([[<<index meta-data>>]]) is covered in the next 
 section.
-%Sect.~\ref{sec:StatisticalAnalysis}.
+When we have extracted the meta-data we index it in the meta-data storage.
 
 
 \section{The Statistical Analysis}
 \label{sec:StatisticalAnalysis}
 
-In the Enron dataset, we found that the average message was
-X
-excluding any headers and attachments.
-The average user sent
-X
-messages per day, i.e.~we need on average
-X
-per day.
-The average user communicates with
-X
-other users.
+In this section we will cover what statistics we are interested in and what 
+meta-data we require for these, i.e.~[[<<generate statistics>>]] and
+[[<<index meta-data>>]], respectively.
+This also lets us cover [[<<initialize database>>]].
 
-\dots
+\subsection{Indexing the Emails}
+
+We want to extract the following fields from every email:
+\begin{inparablank}
+\item the message identifier ([[id]]),
+\item who sent it ([[from]]),
+\item to whom it was sent ([[to]]), including any CC ([[cc]]) and BCC 
+([[bcc]]),
+\item the time it was sent ([[time]]),
+\item the subject line ([[subject]]), and
+\item the size of the message ([[size]]).
+\end{inparablank}
+This would allow us to create the following database table:
+<<initialize database>>=
+with metadata:
+  metadata.execute( """
+create table emails
+  ( id TEXT,
+    from TEXT,
+    to TEXT, cc TEXT, bcc TEXT,
+    subject TEXT,
+    time TEXT,
+    size INTEGER ) ;
+""" )
+@ The Python [[with]] statement ensures that the database commits or rolls 
+back, depending whether any error occurs.
+
+With this database we can index the email messages as follows:
+<<index meta-data>>=
+with metadata:
+  metadata.execute( "insert into emails values ( ?, ?, ?, ?, ?, ? ) ;", \
+    email["Message-ID"], email["From"], \
+    email["To"], email["CC"], email["BCC"], \
+    email["Subject"], \
+    email["Date"], len( email.get_payload() ) )
+@ The [[payload()]] method returns the message text if it is not a multi-part 
+message.
+If it is a multi-part message, it will return an object containing the 
+different parts.
+However, we leave handling of multi-part messages for future work.
+
+\subsection{Computing Different Statistics}
+
+We are interested in several statistics for the email dataset.
+In this section we will cover how to compute them.
+The statistics we are interested in are:
+\begin{inparablank}
+\item the average message-size excluding any headers and attachments,
+\item the average number of messages per day sent by a user, and
+\item the average number of contacts a user communicates with.
+\end{inparablank}
+
+We will start by computing the average message-size.
+To do this we can use the following function.
+<<functions>>=
+def average_message_size( metadata ):
+  <<compute the average message-size>>
+  <<compute the standard-deviation of message-sizes>>
+  <<return the average message size with correct precision>>
+@
 
 
 \section{Generating the Output}
 \label{sec:Output}
 
-Now that we have all the questions in [[exam_questions]] (see
-[[<<generate exam>>]] above), we can move on to the problem of outputting it.
-So in this section we define [[<<output result>>]].
-
-The trivial solution is to just print the code for the questions to standard 
-out.
-Hence we let
-<<output result>>=
-for q in exam_questions:
-  print( "%s" % q.get_code() )
-@
+Now that we have some statistics computed, we want to output them.
+We output the expected statistics as the tabular part of a LaTeX table.
 
 
 \section{Future Work}
@@ -248,8 +341,15 @@ for q in exam_questions:
 There are things that would be worth extending in this solution.
 We give a list below, somewhat in order of priority.
 (Or order of complexity, so easiest first.)
+\begin{itemize}
+\item The database for the meta-data is probably not normalized.
+However, this works for our current needs.
 
-\dots
+\item We want to be able to correctly handle multi-part messages.
+Currently, text-only messages, with no attachments are assumed.
+
+\item If the database file exists, then use that one instead of the dataset.
+\end{itemize}
 
 
 \section*{Acknowledgements}
