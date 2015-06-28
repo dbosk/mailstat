@@ -469,9 +469,11 @@ When we generate the output we only need to process the list of keywords,
 [[args["statistics"]]].
 <<generate statistics>>=
 <<keyword-to-function mapping>>
-for s in args["statistics"]:
-  print( "%s: %s" % ( s, function[s]( metadata ) ) )
-@
+if args["statistics"]:
+  for s in args["statistics"]:
+    print( "%s: %s" % ( s, function[s]( metadata ) ) )
+@ Since requesting output on the command-line is optional, we must first check 
+it with the above conditional.
 
 
 \section{Future Work}
