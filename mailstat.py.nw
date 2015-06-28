@@ -147,11 +147,17 @@ argp.add_argument( "-f", "--file", default=":memory:", \
   help="Sets an optional file to store the database" )
 @ When we create the database, we will use this file name:
 <<process arguments>>=
-metadata = sqlite3.connect( args["file"] )
-<<initialize database>>
+metadata = initialize_database( args["file"] )
 @ If it is not set, it will default to the special name <:memory:> which makes 
 sqlite3 keep the database in memory.
-Of course, for this we also need to import the sqlite3 module:
+The function [[initialize_database]] is defined as
+<<functions>>=
+def initialize_database( file ):
+  metadata = sqlite3.connect( file )
+  <<create database tables>>
+  return metadata
+@ We define what the database tables should contain later.
+Of course, since we use sqlite3, we also need to import the sqlite3 module:
 <<imports>>=
 import sqlite3
 @
@@ -241,8 +247,10 @@ import email.parser
 We can thus parse the email file using the following function:
 <<functions>>=
 def parse_email( file ):
-  parser = email.parser.Parser()
-  return parser.parse( file )
+  try:
+    return email.message_from_file( file )
+  except:
+    return None
 @ And thus
 <<process file>>=
 email = parse_email( path.open() )
@@ -251,6 +259,8 @@ index_email( metadata, email )
 given email and indexes it in the [[metadata]] database:
 <<functions>>=
 def index_email( metadata, email ):
+  if not email:
+    return
   <<index meta-data>>
 @ What data is extracted ([[<<index meta-data>>]]) is covered in the next 
 section.
@@ -277,7 +287,7 @@ We want to extract the following fields from every email:
 \item the size of the message ([[size]]).
 \end{inparablank}
 This would allow us to create the following database table:
-<<initialize database>>=
+<<create database tables>>=
 with metadata:
   metadata.execute( """
 create table emails
@@ -294,7 +304,9 @@ back, depending whether any error occurs.
 With this database we can index the email messages as follows:
 <<index meta-data>>=
 with metadata:
-  recipients = set( email["To"] )
+  recipients = set()
+  if email["To"]:
+    recipients.update( set( email["To"] ) )
   if email["CC"]:
     recipients.update( set( email["CC"] ) )
   if email["BCC"]:
@@ -375,7 +387,7 @@ function.update( { "mean_msg_size" : mean_message_size } )
 We continue by computing the mean number of messages per day a user sends.
 To do this we define a similar function as above.
 <<functions>>=
-def mean_number_of_messages( metadata ):
+def mean_message_frequency( metadata ):
   <<get the number of messages per person>>
   <<return the mean with correct precision>>
 @ We already covered
@@ -394,7 +406,7 @@ columns.
 
 Finally, we add this function to the keyword mapping:
 <<keyword-to-function mapping>>=
-function.update( { "mean_num_msgs" : mean_number_of_messages } )
+function.update( { "mean_msg_freq" : mean_message_frequency } )
 @
 
 \subsubsection{The Mean Number of Contacts}
