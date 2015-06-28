@@ -301,6 +301,20 @@ create table emails
 @ The Python [[with]] statement ensures that the database commits or rolls 
 back, depending whether any error occurs.
 
+We want to index the emails using their timestamp to be able to search, sort and compute differences with the timestamps. To do this we can use the following function:
+<<functions>>=
+def strtounix(s):
+  s = s[:-6]
+  t = time.strptime(s,"%a, %d %b %Y %H:%M:%S %z")
+  from time import mktime
+  from datetime import datetime
+  dt = datetime.fromtimestamp(mktime(t))
+  return int(dt.strftime("%s"))
+@
+<<imports>>=
+import time
+@ This function first parses the string containing the date and then calculates and returns the Unix time (number of seconds that have elapsed since 00:00:00, 1st January 1970). The Unix time will then be our reference time in sorting and calculations such as average number of messages per day a user sends. The precision of the returned value by the function is in seconds, which is the best we can get from the database. The imported module provides various time-related functions as we need.
+
 With this database we can index the email messages as follows:
 <<index meta-data>>=
 with metadata:
@@ -314,7 +328,7 @@ with metadata:
   for recipient in recipients:
     metadata.execute( "insert into emails values ( ?, ?, ?, ?, ?, ? ) ;", \
     ( email["Message-ID"], email["From"], recipient, \
-    email["Subject"], email["Date"], len( email.get_payload() ) ) )
+    email["Subject"], strtounix(email["Date"]), len( email.get_payload() ) ) )
 @ The [[payload()]] method returns the message text if it is not a multi-part 
 message.
 If it is a multi-part message, it will return an object containing the 
