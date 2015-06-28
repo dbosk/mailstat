@@ -319,11 +319,13 @@ The particular statistics we are interested in are:
 \item the mean number of contacts a user communicates with.
 \end{inparablank}
 In this section we will cover how to compute them.
-All computations should be scientifically precise, for this we will use 
-Python's [[decimal]] module:
+All computations should be scientifically precise, for this we will use the 
+[[libsci]] package~\cite{libsci}.
 <<imports>>=
+import libsci
 import decimal
-@
+@ This module provides scientific extensions to Python's [[Decimal]] class in 
+the [[decimal]] module.
 
 We will soon continue with defining a set of functions for computing different 
 statistics.
@@ -352,10 +354,10 @@ database:
 values = []
 with metadata as db:
   result = db.execute( "select size from emails" )
-  values = list( map( lambda x: decimal.Decimal( x[0] ), result ) )
-@ Now that we have the message-sizes in [[values]], and they are of the type 
-[[Decimal]], we can compute the mean and standard-deviation with arbitrary 
-precision.
+  values = list( map( lambda x: libsci.SciDecimal( x[0] ), result ) )
+@ Now that we have the message-sizes in [[values]], and they are of a type 
+derived from [[Decimal]], we can compute the mean and standard-deviation with 
+arbitrary precision.
 For this we use Python's [[statistics]] module:
 <<imports>>=
 import statistics
@@ -387,7 +389,7 @@ We let
 values = []
 with metadata as db:
   result = db.execute( "select count( sender ) from emails group by sender" )
-  values = list( map( lambda x: decimal.Decimal( x[0] ), result ) )
+  values = list( map( lambda x: libsci.SciDecimal( x[0] ), result ) )
 @ This SQL query counts the number of email messages grouped by sender.
 As such we could just as well apply the [[count]] function on any of the 
 columns.
@@ -413,7 +415,7 @@ values = []
 with metadata as db:
   result = db.execute( """select count( distinct recipient ) from emails
     group by sender""" )
-  values = list( map( lambda x: decimal.Decimal( x[0] ), result ) )
+  values = list( map( lambda x: libsci.SciDecimal( x[0] ), result ) )
 @ This SQL query counts the distinct number of recipients for the emails from 
 each sender.
 
