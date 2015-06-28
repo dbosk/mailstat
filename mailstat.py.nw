@@ -21,7 +21,7 @@
 \let\nwdocspar=\smallbreak
 
 \usepackage{csquotes}
-\MakeBlockQuote{<}{|}{>}
+\MakeBlockQuote{<}{§}{>}
 \EnableQuotes
 
 \usepackage[natbib,style=alphabetic,backend=bibtexu]{biblatex}
@@ -72,7 +72,7 @@ Finally, Sect.~\ref{sec:FutureWork} covers some future work.
 
 The program is a Python 3 script, [[<<mailstat.py>>]].
 We will use the following structure:
-<<examgen.py>>=
+<<mailstat.py>>=
 #!/usr/bin/env python3
 <<imports>>
 <<classes>>
@@ -82,7 +82,7 @@ a LaTeX paper.
 So we will implement all parts as separate functions to provide an API for this 
 purpose.
 However, we also want to be able to run this as a command-line program, thus
-<<examgen.py>>=
+<<mailstat.py>>=
 def main( argv ):
   <<main body>>
 if (__name__ == "__main__"):
@@ -101,7 +101,6 @@ Basically, we need the following code blocks:
 <<main body>>=
 <<parse command-line arguments>>
 <<generate statistics>>
-<<output result>>
 <<clean up and exit>>
 @ The [[<<parse command-line arguments>>]] and [[<<parse the email dataset>>]] 
 chunks are covered together, in parallel, starting in Sect.~\ref{sec:Design}.
@@ -176,7 +175,7 @@ Since the datasets are in Maildir format, this will be a path to the root
 directory of the Maildir structure.
 As such we will use
 <<imports>>=
-from pathlib import Path
+import pathlib
 @ and add each path for processing:
 <<process arguments>>=
 for path in args["dataset"]:
@@ -189,7 +188,7 @@ To read all meta-data, we will traverse the directories in depth-first order
 and thus we will use a recursive function to update [[metadata]] with the data 
 found in [[path]]:
 <<update metadata>>=
-update_metadata( metadata, path, args["include"] )
+update_metadata( metadata, pathlib.Path( path ), args["include"] )
 @ We stated above that we might not want to process all messages, rather, we 
 are interested in the messages in the sent folders.
 To do this we add a command-line option:
@@ -218,8 +217,8 @@ def update_metadata( metadata, path, filter=".*" ):
   <<check if path matches regex>>
   if path.is_dir():
     for directory_entry in path.iterdir():
-      return update_metadata( metadata, directory_entry )
-  else
+      update_metadata( metadata, directory_entry )
+  else:
     <<process file>>
   return metadata
 @ We will iterate through the directory's contents, recursively process each 
@@ -248,7 +247,7 @@ def parse_email( file ):
 <<process file>>=
 email = parse_email( path.open() )
 index_email( metadata, email )
-@ where [[index_metadata]] is a function that extracts the meta-data from the 
+@ where [[index_email]] is a function that extracts the meta-data from the 
 given email and indexes it in the [[metadata]] database:
 <<functions>>=
 def index_email( metadata, email ):
@@ -261,10 +260,10 @@ When we have extracted the meta-data we index it in the meta-data storage.
 \section{The Statistical Analysis}
 \label{sec:StatisticalAnalysis}
 
-In this section we will cover what statistics we are interested in and what 
-meta-data we require for these, i.e.~[[<<generate statistics>>]] and
-[[<<index meta-data>>]], respectively.
-This also lets us cover [[<<initialize database>>]].
+In this section we will cover what statistics we are interested in, what 
+meta-data we require for these, and how to compute them.
+We start by covering the indexing of our dataset.
+Then we continue with computing the different statistics.
 
 \subsection{Indexing the Emails}
 
@@ -272,8 +271,7 @@ We want to extract the following fields from every email:
 \begin{inparablank}
 \item the message identifier ([[id]]),
 \item who sent it ([[from]]),
-\item to whom it was sent ([[to]]), including any CC ([[cc]]) and BCC 
-([[bcc]]),
+\item to whom it was sent ([[to]]), including any CCs and BCCs,
 \item the time it was sent ([[time]]),
 \item the subject line ([[subject]]), and
 \item the size of the message ([[size]]).
@@ -284,8 +282,8 @@ with metadata:
   metadata.execute( """
 create table emails
   ( id TEXT,
-    from TEXT,
-    to TEXT, cc TEXT, bcc TEXT,
+    sender TEXT,
+    recipient TEXT,
     subject TEXT,
     time TEXT,
     size INTEGER ) ;
@@ -296,11 +294,15 @@ back, depending whether any error occurs.
 With this database we can index the email messages as follows:
 <<index meta-data>>=
 with metadata:
-  metadata.execute( "insert into emails values ( ?, ?, ?, ?, ?, ? ) ;", \
-    email["Message-ID"], email["From"], \
-    email["To"], email["CC"], email["BCC"], \
-    email["Subject"], \
-    email["Date"], len( email.get_payload() ) )
+  recipients = set( email["To"] )
+  if email["CC"]:
+    recipients.update( set( email["CC"] ) )
+  if email["BCC"]:
+    recipients.update( set( email["BCC"] ) )
+  for recipient in recipients:
+    metadata.execute( "insert into emails values ( ?, ?, ?, ?, ?, ? ) ;", \
+    ( email["Message-ID"], email["From"], recipient, \
+    email["Subject"], email["Date"], len( email.get_payload() ) ) )
 @ The [[payload()]] method returns the message text if it is not a multi-part 
 message.
 If it is a multi-part message, it will return an object containing the 
@@ -310,29 +312,141 @@ However, we leave handling of multi-part messages for future work.
 \subsection{Computing Different Statistics}
 
 We are interested in several statistics for the email dataset.
-In this section we will cover how to compute them.
-The statistics we are interested in are:
+The particular statistics we are interested in are:
 \begin{inparablank}
-\item the average message-size excluding any headers and attachments,
-\item the average number of messages per day sent by a user, and
-\item the average number of contacts a user communicates with.
+\item the mean message-size excluding any headers and attachments,
+\item the mean number of messages per day sent by a user, and
+\item the mean number of contacts a user communicates with.
 \end{inparablank}
+In this section we will cover how to compute them.
+All computations should be scientifically precise, for this we will use 
+Python's [[decimal]] module:
+<<imports>>=
+import decimal
+@
 
-We will start by computing the average message-size.
+We will soon continue with defining a set of functions for computing different 
+statistics.
+When we later want to output these statistics running this program from the 
+command-line, we will use a dictionary [[function]] to map keywords supplied on 
+the command-line to these functions.
+We will set this dictionary up using the [[<<keyword-to-function mapping>>]] 
+chunk.
+So first we let
+<<keyword-to-function mapping>>=
+function = {}
+@
+See Sect.~\ref{sec:Output} for details.
+
+\subsubsection{The Mean Message-Size}
+
+We will start by computing the mean message-size.
 To do this we can use the following function.
 <<functions>>=
-def average_message_size( metadata ):
-  <<compute the average message-size>>
-  <<compute the standard-deviation of message-sizes>>
-  <<return the average message size with correct precision>>
+def mean_message_size( metadata ):
+  <<get message-sizes from the database>>
+  <<return the mean with correct precision>>
+@ To get the message-sizes, we can simply select those data in the meta-data 
+database:
+<<get message-sizes from the database>>=
+values = []
+with metadata as db:
+  result = db.execute( "select size from emails" )
+  values = list( map( lambda x: decimal.Decimal( x[0] ), result ) )
+@ Now that we have the message-sizes in [[values]], and they are of the type 
+[[Decimal]], we can compute the mean and standard-deviation with arbitrary 
+precision.
+For this we use Python's [[statistics]] module:
+<<imports>>=
+import statistics
+@ Thus we can simply let
+<<return the mean with correct precision>>=
+return statistics.mean( values ), statistics.stdev( values )
+@ to achieve that.
+
+We will use a shortened version of the function name as a keyword, so we make 
+the following addition
+<<keyword-to-function mapping>>=
+function.update( { "mean_msg_size" : mean_message_size } )
+@
+
+\subsubsection{The Mean Number of Messages}
+
+We continue by computing the mean number of messages per day a user sends.
+To do this we define a similar function as above.
+<<functions>>=
+def mean_number_of_messages( metadata ):
+  <<get the number of messages per person>>
+  <<return the mean with correct precision>>
+@ We already covered
+[[<<return the mean with correct precision>>]].
+This leaves us only with [[<<get the number of messages per person>>]] to 
+define.
+We let
+<<get the number of messages per person>>=
+values = []
+with metadata as db:
+  result = db.execute( "select count( sender ) from emails group by sender" )
+  values = list( map( lambda x: decimal.Decimal( x[0] ), result ) )
+@ This SQL query counts the number of email messages grouped by sender.
+As such we could just as well apply the [[count]] function on any of the 
+columns.
+
+Finally, we add this function to the keyword mapping:
+<<keyword-to-function mapping>>=
+function.update( { "mean_num_msgs" : mean_number_of_messages } )
+@
+
+\subsubsection{The Mean Number of Contacts}
+
+Now we will compute the mean number of contact a user communicates with.
+We do this very similarly as for the mean number of messages:
+<<functions>>=
+def mean_number_of_contacts( metadata ):
+  <<get the number of contacts per person>>
+  <<return the mean with correct precision>>
+@ The only part that remains to be defined is how to fetch the correct values 
+from the database.
+We let
+<<get the number of contacts per person>>=
+values = []
+with metadata as db:
+  result = db.execute( """select count( distinct recipient ) from emails
+    group by sender""" )
+  values = list( map( lambda x: decimal.Decimal( x[0] ), result ) )
+@ This SQL query counts the distinct number of recipients for the emails from 
+each sender.
+
+Finally, we add this function to the keyword mapping:
+<<keyword-to-function mapping>>=
+function.update( { "mean_num_contacts" : mean_number_of_contacts } )
 @
 
 
 \section{Generating the Output}
 \label{sec:Output}
 
-Now that we have some statistics computed, we want to output them.
-We output the expected statistics as the tabular part of a LaTeX table.
+Now that we have functions to compute some statistics, we want to perform the 
+computations and output them.
+%We output the expected statistics as the tabular part of a LaTeX table.
+
+We might not always be interested in all statistics.
+For this reason we add a command-line argument with which we can specify which 
+statistics we are interested in:
+<<parse arguments>>=
+argp.add_argument( "-s", "--statistics", nargs="+", \
+  required=True, help="Selects statistics to output" )
+@ This will give us a list of keywords to process.
+For ease of use these keywords will be the names of the functions defined in 
+Sect.~\ref{sec:StatisticalAnalysis} above.
+
+When we generate the output we only need to process the list of keywords, 
+[[args["statistics"]]].
+<<generate statistics>>=
+<<keyword-to-function mapping>>
+for s in args["statistics"]:
+  print( "%s: %s" % ( s, function[s]( metadata ) ) )
+@
 
 
 \section{Future Work}
@@ -349,13 +463,16 @@ However, this works for our current needs.
 Currently, text-only messages, with no attachments are assumed.
 
 \item If the database file exists, then use that one instead of the dataset.
+
+\item It would be useful to also have a regular expression for paths to 
+exclude, currently we only have one for matching paths to include.
 \end{itemize}
 
 
 \section*{Acknowledgements}
 
 This program was developed as part of my research.
-Hence this program's development was funded by
+Hence its development was funded by
 the Swedish Foundation for Strategic Research grant SSF FFL09-0086
 and the Swedish Research Council grant VR 2009-3793.
 
