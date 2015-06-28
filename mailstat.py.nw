@@ -327,7 +327,8 @@ We are interested in several statistics for the email dataset.
 The particular statistics we are interested in are:
 \begin{inparablank}
 \item the mean message-size excluding any headers and attachments,
-\item the mean number of messages per day sent by a user, and
+\item the mean total number of messages sent by a user,
+\item the mean number of messages sent by a user per day, and
 \item the mean number of contacts a user communicates with.
 \end{inparablank}
 In this section we will cover how to compute them.
@@ -382,12 +383,12 @@ the following addition
 function.update( { "mean_msg_size" : mean_message_size } )
 @
 
-\subsubsection{The Mean Number of Messages}
+\subsubsection{The Mean Total Messages}
 
-We continue by computing the mean number of messages per day a user sends.
+In a similar manner, we can compute the mean total number of messages per user.
 To do this we define a similar function as above.
 <<functions>>=
-def mean_message_frequency( metadata ):
+def mean_total_messages( metadata ):
   <<get the number of messages per person>>
   <<return the mean with correct precision>>
 @ We already covered
@@ -406,8 +407,17 @@ columns.
 
 Finally, we add this function to the keyword mapping:
 <<keyword-to-function mapping>>=
-function.update( { "mean_msg_freq" : mean_message_frequency } )
+function.update( { "mean_total_msg" : mean_total_messages } )
 @
+
+\subsubsection{The Mean Message Frequency}
+
+We continue by computing the mean number of messages a user sends per day.
+This statistic requires more complex computations compared to the previous one.
+To correctly estimate the message frequency per day for a user, we need to 
+first find the mean frequency per day for each user, then we need to compute 
+the mean for all users together.
+
 
 \subsubsection{The Mean Number of Contacts}
 
@@ -447,10 +457,13 @@ For this reason we add a command-line argument with which we can specify which
 statistics we are interested in:
 <<parse arguments>>=
 argp.add_argument( "-s", "--statistics", nargs="+", \
-  required=True, help="Selects statistics to output" )
+  help="Selects statistics to output" )
 @ This will give us a list of keywords to process.
 For ease of use these keywords will be the names of the functions defined in 
 Sect.~\ref{sec:StatisticalAnalysis} above.
+Note that we do not make this option mandatory.
+Sometimes we want to run the mailstat utility to just generate the sqlite3 
+database file to store on disk for later use.
 
 When we generate the output we only need to process the list of keywords, 
 [[args["statistics"]]].
