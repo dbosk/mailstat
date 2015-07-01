@@ -12,6 +12,7 @@ mailstat.pdf: rfc.bib
 .PHONY: clean
 clean:
 	${RM} mailstat mailstat.py mailstat.pdf mailstat.tex
+	${RM} -R __pycache__
 
 
 PKG_NAME-main= 			mailstat
