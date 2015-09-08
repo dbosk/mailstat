@@ -295,7 +295,7 @@ create table emails
     sender TEXT,
     recipient TEXT,
     subject TEXT,
-    time TEXT,
+    time INTEGER,
     size INTEGER ) ;
 """ )
 @ The Python [[with]] statement ensures that the database commits or rolls 
@@ -368,7 +368,7 @@ See Sect.~\ref{sec:Output} for details.
 \subsubsection{The Mean Message-Size}
 
 We will start by computing the mean message-size.
-To do this we can use the following function.
+To do this we will use the following function.
 <<functions>>=
 def mean_message_size( metadata ):
   <<get message-sizes from the database>>
@@ -391,8 +391,8 @@ import statistics
 return statistics.mean( values ), statistics.stdev( values )
 @ to achieve that.
 
-We will use a shortened version of the function name as a keyword, so we make 
-the following addition
+We will use a shortened version of the function name as a keyword on the 
+command line, so we make the following addition
 <<keyword-to-function mapping>>=
 function.update( { "mean_msg_size" : mean_message_size } )
 @
@@ -419,6 +419,9 @@ with metadata as db:
 As such we could just as well apply the [[count]] function on any of the 
 columns.
 
+We already defined [[<<return the mean with correct precision>>]] above, so we 
+do not need to do that again.
+
 Finally, we add this function to the keyword mapping:
 <<keyword-to-function mapping>>=
 function.update( { "mean_total_msg" : mean_total_messages } )
@@ -427,11 +430,47 @@ function.update( { "mean_total_msg" : mean_total_messages } )
 \subsubsection{The Mean Message Frequency}
 
 We continue by computing the mean number of messages a user sends per day.
-This statistic requires more complex computations compared to the previous one.
+We will use the following function:
+<<functions>>=
+def mean_message_freq( metadata ):
+  <<get the mean message frequency per person>>
+  <<return the mean with correct precision>>
+@ This statistic requires more complex computations compared to the previous 
+one.
 To correctly estimate the message frequency per day for a user, we need to 
 first find the mean frequency per day for each user, then we need to compute 
-the mean for all users together.
+the mean of the means of all users together.
 
+To compute the mean for each user, we need to find the user's messages and sort 
+them by time.
+The difference in time from the first to the last messages gives us the time 
+interval.
+Then we can just count the messages and divide by the time interval to get the 
+number of messages per time unit.
+This can be accomplished by the following query:
+<<get the mean message frequency per person>>=
+values = []
+with metadata as db:
+  result = db.execute( \
+    "select count(sender), (max(time) - min(time))" +
+    "from emails group by sender" )
+@ This will give us the number of messages in the first column and the total 
+time interval in the second column.
+Consequently we want to use these values in the computation of the average 
+number of messages per time unit.
+As we will divide with the time interval, we want to filter out those lines 
+which are zero.
+<<get the mean message frequency per person>>=
+  values = list( \
+    map( lambda x: decimal.Decimal( x[0] )/decimal.Decimal( x[1] ), \
+    filter( lambda x: x[1] != 0, result ) ) )
+@
+
+To use this function from the command line, we add this function to the keyword 
+mapping:
+<<keyword-to-function mapping>>=
+function.update( { "mean_msg_freq" : mean_message_freq } )
+@
 
 \subsubsection{The Mean Number of Contacts}
 
