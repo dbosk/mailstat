@@ -320,11 +320,11 @@ With this database we can index the email messages as follows:
 with metadata:
   recipients = set()
   if email["To"]:
-    recipients.update( set( email["To"] ) )
+    recipients.update( set( email["To"].split( ";" ) ) )
   if email["CC"]:
-    recipients.update( set( email["CC"] ) )
+    recipients.update( set( email["CC"].split( ";" ) ) )
   if email["BCC"]:
-    recipients.update( set( email["BCC"] ) )
+    recipients.update( set( email["BCC"].split( ";" ) ) )
   for recipient in recipients:
     metadata.execute( "insert into emails values ( ?, ?, ?, ?, ?, ? ) ;", \
     ( email["Message-ID"], email["From"], recipient, \
