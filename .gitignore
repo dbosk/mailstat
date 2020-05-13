@@ -1,5 +1,6 @@
 mailstat.py
 rfc.bib
+__pycache__/
 
 ## Core latex/pdflatex auxiliary files:
 *.aux
